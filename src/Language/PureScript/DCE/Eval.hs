@@ -1,7 +1,7 @@
 -- |
 -- Evaluation of PureScript's expressions used in dead call elimnation.
 module Language.PureScript.DCE.Eval
-  ( dceEval ) where
+  ( evaluate ) where
 
 import Control.Monad
 --import Control.Monad.Except
@@ -22,29 +22,27 @@ import qualified Language.PureScript.DCE.Constants as C
 import Prelude.Compat hiding (mod)
 import Safe (atMay)
 
+
 data EvalState
   = NotYet -- ^ an expression has not yet been evaluated
   | Done   -- ^ an expression has been evaluated
   deriving (Eq, Show)
+
 
 data StackT frame =
     EmptyStack
   | ConsStack !frame !(StackT frame)
   deriving (Show, Functor)
 
+
 type Stack = StackT [((Ident, Expr Ann), EvalState)]
+
 
 pushStack :: [(Ident, Expr Ann)]
           -> Stack
           -> Stack
 pushStack frame st = map (\s -> (s, NotYet)) frame `ConsStack` st
 
-{-
-popStack :: StackT frame
-         -> StackT frame
-popStack EmptyStack      = error "popStack: EmptyStack"
-popStack (ConsStack _ s) = s
--}
 
 lookupStack :: Ident
             -> Stack
@@ -53,6 +51,7 @@ lookupStack _i EmptyStack       = Nothing
 lookupStack i  (ConsStack f fs) = case find (\((i', _), _) -> i == i') f of
     Nothing -> lookupStack i fs
     Just x  -> Just x
+
 
 -- Mark first found expression as evaluated to avoid infinite loops.
 markDone :: Ident -> Stack -> Stack
@@ -66,6 +65,7 @@ markDone i (ConsStack l ls) =
     | i == i'   = ((a, Done) : is, True)
     | otherwise = (x         : is, done)
 
+
 -- |
 -- Evaluate expressions in a module:
 --
@@ -77,10 +77,10 @@ markDone i (ConsStack l ls) =
 --
 -- Keep stack of local identifiers from @let@ and @case@ expressions, ignoring
 -- the ones that are comming from abstractions.
-dceEval
+evaluate
   :: [Module Ann]
   -> [Module Ann]
-dceEval mods = map evalModule mods
+evaluate mods = map evalModule mods
   where
   evalModule :: Module Ann -> Module Ann
   evalModule mod@Module{ moduleName, moduleDecls } =
@@ -91,12 +91,12 @@ dceEval mods = map evalModule mods
   onModuleBind mn (Rec binds')    = Rec $ map (fmap $ onExpr mn (pushStack (map (\((_, i), e) -> (i, e)) binds') EmptyStack)) binds'
 
   -- Push identifiers defined in binders onto the stack
-  onBinders
+  pushBinders
     :: [Expr Ann]
     -> [Binder Ann]
     -> Stack
     -> Stack
-  onBinders es bs = pushStack (concatMap fn (zip bs es))
+  pushBinders es bs = pushStack (concatMap fn (zip bs es))
     where
       fn :: (Binder Ann, Expr Ann) -> [(Ident, Expr Ann)]
       fn (NullBinder _, _ )              = []
@@ -111,7 +111,7 @@ dceEval mods = map evalModule mods
   -- `Case` binders are pushed into / poped from the stack.
   -- * `Let` binds are added in `onBind` and poped from the stack
   --   when visiting `Let` expression.
-  -- * `Case` binds are added in `onBinders` and poped in the
+  -- * `Case` binds are added in `pushBinders` and poped in the
   --  `everywhereOnValuesM` monadic action.
   onExpr :: ModuleName
          -> Stack
@@ -130,7 +130,7 @@ dceEval mods = map evalModule mods
               | otherwise
               -> Case ann es (maybeToList cs')
             Just (CaseAlternative bs (Left gs))
-              -> Case ann es [CaseAlternative bs (Left (fltGuards (onBinders es bs st) gs))]
+              -> Case ann es [CaseAlternative bs (Left (fltGuards (pushBinders es bs st) gs))]
           else Case ann es $
                 filter
                   (fltBinders (fmap snd `map` es') . caseAlternativeBinders)
